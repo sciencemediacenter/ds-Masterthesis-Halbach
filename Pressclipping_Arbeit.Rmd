@@ -1,0 +1,1263 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+# Pressclipping Auswertung
+
+```{r, message=FALSE, error=FALSE, warning=FALSE, results='hide'}
+library(tidyverse)
+library(knitr)
+library(tm)
+library(lubridate)
+library(gridExtra)
+library(gglorenz)
+library(DescTools)
+library(gender)
+library(genderdata)
+library(poweRlaw)
+
+## ggplot
+theme_set(theme_minimal())
+#theme_update(legend.title = element_blank(), plot.margin = margin(10, 15, 20, 50, "pt"))
+
+scale_glob <- 1.3
+
+load("Pressclipping.RData")
+storyData <- storyData %>% mutate(Jahr = floor_date(storyDate, "year"), Monat = floor_date(storyDate, "month"))
+reports <- left_join(reports, media, by = "mediaOutlet")
+
+authors <- tibble(authors)
+citations <- tibble(citations)
+emails <- tibble(emails)
+embargo <- tibble(embargo)
+experts <- tibble(experts)
+media <- tibble(media)
+reports <- tibble(reports)
+storyData <- tibble(storyData)
+
+storyData <- storyData %>% mutate(ressort = if_else(ressort == "Lebenswissenschaften", "Lebenswiss.", ressort))
+```
+
+```{r, message=FALSE, error=FALSE, warning=FALSE}
+Stamm_Faelle <- read_csv2("Stammdaten_Faelle.csv") %>% 
+   select(weg1 = "Stammdaten>>", storyNo = "Ident-Nr. global", SMC_Themengebiet = "SMC-Themengebiet", "Fachgebiet", "Anlasstyp", "Journal", 
+          Ortsbezug = "Ortsbezug Anlass", weg2 = "SMC-Zusatz>>", Gesamtlaenge_SMC_story = "Gesamtlänge SMC Story", Laenge_Teaser = "Länge Teaser", 
+          weg3 = "Expertenstatements>>", idExpert = "ID Expert*in", Name_Expert = "Name Expert*in", "Affiliation", 
+          Land_Affiliation = "Land der Affiliation", Laenge_Statement = "Länge Statement") %>% select(-weg1, -weg2, -weg3) %>%
+   mutate(storyNo = as.character(storyNo), expertNo = as.character(as.numeric(gsub("[0-9]{5}-", "", idExpert))-1))
+Stamm_Kontrollen <- read_csv2("Stammdaten_Kontrollen.csv") %>% 
+   select(storyNo = "Ident-Nr. global", SMC_Themengebiet = "SMC-Themengebiet", "Fachgebiet", "Anlasstyp", "Journal", 
+          Ortsbezug = "Ortsbezug Anlass") %>%
+   mutate(storyNo = as.character(storyNo))
+
+Inhaltsanalyse <- read_csv2("Codebuch_Master_ERHEBUNG_Merge.csv", skip = 1) %>% 
+  select(Rahmendaten = "Rahmendaten>>", id_global ="Ident-Nr. global",
+         id_beitrag = "Ident-Nr. Beitrag", "Erscheinungsdatum", "Medium", "Mediengattung", "Ressort", 
+         SMC_Story = "SMC-Story", form_kat = "Formale Kateg.>>", Laenge_Beitrag = "Länge Beitrag", Laenge_SMC_Material = "Länge SMC-Material", 
+         SMC_als_Quelle = "SMC als Quelle", Position_SMC_Material = "Position SMC-Material", UrheberIn = "Urheber*in", "Nachrichtenagentur1", 
+         Inhaltl_Kateg = "Inhaltl. Kateg. >>", wiss_Primaerquellen = "Anzahl wiss. Primärquellen", 
+         AkteurInnen = "Akteur*innen>>", 
+         wiss_Experten = "Anzahl wiss. Experten", Politiker = "Anzahl Politiker/ pol. Zentren", Wirtschaft = "Anzahl Wirtschaft/Industrie", 
+         NGO = "Anzahl NGO/Verbände/Kirche", wiss_Ex = "Wiss. Expert*innen >>", 
+         Name_0 = "Vor-/Name...24", Geschlecht_0 = "Geschlecht...25", Land_0 = "Land Affil....26", Beteiligung_0 = "Beteiligung...27", SMC_verm_0 = "SMC verm....28", 
+         Zitatlaenge_0 = "Zitatlänge...29",
+         Name_1 = "Vor-/Name...30", "Geschlecht...31", Land_1 = "Land Affil....32", "Beteiligung...33", SMC_verm_1 = "SMC verm....34", Zitatlaenge_1 = "Zitatlänge...35",
+         Name_2 = "Vor-/Name...36", "Geschlecht...37", Land_2 = "Land Affil....38", "Beteiligung...39", SMC_verm_2 = "SMC verm....40", Zitatlaenge_2 = "Zitatlänge...41",
+         Name_3 = "Vor-/Name...42", "Geschlecht...43", Land_3 = "Land Affil....44", "Beteiligung...45", SMC_verm_3 = "SMC verm....46", Zitatlaenge_3 = "Zitatlänge...47",
+         Name_4 = "Vor-/Name...48", "Geschlecht...49", Land_4 = "Land Affil....50", "Beteiligung...51", SMC_verm_4 = "SMC verm....52", Zitatlaenge_4 = "Zitatlänge...53",
+         Name_5 = "Vor-/Name...54", "Geschlecht...55", Land_5 = "Land Affil....56", "Beteiligung...57", SMC_verm_5 = "SMC verm....58", Zitatlaenge_5 = "Zitatlänge...59",
+         Name_6 = "Vor-/Name...60", "Geschlecht...61", Land_6 = "Land Affil....62", "Beteiligung...63", SMC_verm_6 = "SMC verm....64", Zitatlaenge_6 = "Zitatlänge...65",
+         Name_7 = "Vor-/Name...66", "Geschlecht...67", Land_7 = "Land Affil....68", "Beteiligung...69", SMC_verm_7 = "SMC verm....70", Zitatlaenge_7 = "Zitatlänge...71") %>% 
+  select(-Rahmendaten, -form_kat, -Inhaltl_Kateg, -AkteurInnen, -wiss_Ex) %>% 
+  mutate(id = paste(id_global, id_beitrag, sep = "_"), Kontrolle = grepl("K", id))
+varnames <- names(Inhaltsanalyse)
+
+expertsIA <- Inhaltsanalyse %>% select(varnames[c(19:68)]) %>% 
+  pivot_longer(-c("id", "Kontrolle"),
+               names_to = c(".value", "set"),
+               names_pattern = "(.*)_(.*)") %>% 
+   select(-set) %>% filter(!(is.na(Name))) %>% mutate(SMC_verm = if_else(is.na(SMC_verm), "nein", SMC_verm))
+
+
+# tmp <- Inhaltsanalyse %>% select(wiss_Experten, id)
+# tmp <- expertsIA %>% 
+#    group_by(id) %>% 
+#    summarise(n = n()) %>% 
+#    full_join(tmp, by = "id")
+# tmp %>% filter(n > wiss_Experten)
+
+```
+
+
+
+###Allgemeine Beschreibung des Press-Clipping-Datensatzes von April 2016 bis Ende 2019: 
+```{r}
+# n reports insgesamt im Datensatz
+nrow(reports)
+```
+
+```{r}
+# n Angebote pro Typ insgesamt
+storyData %>% group_by(storyType) %>% summarise(n = n()) %>% kable()
+```
+
+```{r}
+# n reports pro Angebotstyp
+left_join(reports, storyData, by = "storyNo") %>% group_by(storyType) %>% summarise(n = n()) %>% kable()
+```
+
+
+```{r}
+# n citations pro Jahr
+left_join(citations, storyData, by = "storyNo") %>% group_by(Jahr) %>% summarise(n = n()) %>% kable()
+```
+
+
+```{r}
+# n ausgesendete Expert*innen
+left_join(experts, storyData, by = "storyNo") %>% group_by(Jahr) %>% summarise(n = n()) %>% kable()
+```
+
+
+```{r}
+# n zitierte Expert*innen
+left_join(citations, storyData, by = "storyNo") %>% group_by(Jahr, storyNo, civiId) %>% summarise(n = n()) %>% group_by(Jahr) %>% summarise(n = n()) %>% kable()
+```
+
+```{r}
+# n verschiedene, im Datensatz enthaltene Medientitel
+reports %>% select(mediaOutlet) %>% distinct() %>% nrow()
+```
+
+
+##### Kongruenz pro SMC-Themengebiet
+Wie häufig werden Storys pro SMC-Themengebiet kongruent aufgegriffen in den Kongruenzklassen: <20 reports, 20-50 reports, >50-99 reports, >=100 reports.
+
+
+```{r}
+gruppe <- function(n){
+   res <- rep("", length(n))
+   res[n <20] <- "<20"
+   res[n >=20] <- "20-50"
+   res[n >=50] <- "50-99"
+   res[n >=100] <- ">=100"
+   res
+}
+storyData %>% filter(!(storyNo %in% reports$storyNo)) %>% summarise(`Anzahl Storys ohne PC-Treffer` = n())
+
+reports %>% group_by(storyNo) %>% summarise(n = n()) %>% right_join(storyData, by = "storyNo") %>% mutate(n = if_else(is.na(n), 0L, n)) %>% select(subject, ressort, storyNo, n) %>% mutate(Gruppe = gruppe(n)) %>% group_by(ressort, Gruppe) %>% summarise(n = n()) %>% pivot_wider(names_from = Gruppe, values_from = n) %>% kable()
+```
+
+```{r}
+tmp <- tibble(Produkttyp = c("Research in Context", "Rapid Reaction", "Fact Sheet", "Press Briefing", "SMC investigative", "Lab Alert"), 
+       Anzahl = c(261,126,56,29,3,3)) %>% 
+   ggplot(aes(x = "", y = Anzahl, fill = Produkttyp)) +
+   geom_bar(stat = "identity", position = "stack") + 
+   scale_x_discrete(name = "") + 
+   scale_fill_brewer(type = "qual", palette = "Set1") + 
+   coord_flip()
+tmp
+ggsave(filename = "p00_Produkttyp.png", plot = tmp, device = "png", width = 250, height = 100, scale = scale_glob, units = "mm")
+
+```
+
+### F1 Wie lässt sich die Wissenschaftsberichterstattung deutschsprachiger Medienunter Beteiligung des SMC charakterisieren?
+
+#### F1.1 Welche Themengebiete dominieren?
+
+##### Aussendungen
+```{r}
+storyData %>% group_by(ressort) %>% summarise(n = n()) %>% kable()
+
+tmp <- storyData %>% group_by(ressort, Jahr) %>% summarise(n = n())
+tmp %>% pivot_wider(names_from = "Jahr", values_from = n) %>% select(ressort, order(colnames(.))) %>% kable()
+csv <- tmp %>% pivot_wider(names_from = "Jahr", values_from = n) %>% select(ressort, order(colnames(.)))
+# write.csv(csv, fileEncoding = "UTF-8", file = "tab_ressort.csv")
+csv[,-1] <- t(t(csv[,-1]) / colSums(csv[,-1], na.rm = TRUE))
+# write.csv(csv, fileEncoding = "UTF-8", file = "tab_ressort_rel.csv")
+```
+
+```{r}
+tmp %>% pivot_wider(names_from = Jahr, values_from = n) %>% kable()
+tmp$ressort <- factor(tmp$ressort, levels = c("Energie", "Technik", "Umwelt", "Klima", "Lebenswiss.", "Medizin"))
+# Produkte des SMC
+plot1 <- tmp %>% ggplot(aes(fill = ressort, y = n, x = Jahr)) + 
+   geom_bar(position="stack", stat="identity") +
+   labs(title = "a", fill = "Ressort") +
+   scale_fill_brewer(type = "qual", palette = "Paired")
+# Anteil der Ressorts
+plot2 <- tmp %>% ggplot(aes(fill = ressort, y = n, x = Jahr)) + 
+   geom_bar(position="fill", stat="identity") +
+   labs(title = "b", fill = "Ressort", y = "Anteil") +
+   scale_fill_brewer(type = "qual", palette = "Paired")
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+##### Treffer Press Clipping
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% 
+   group_by(ressort.y, Jahr) %>% summarise(n = n())
+csv <- tmp %>% pivot_wider(names_from = "Jahr", values_from = n)
+# write.csv(csv, fileEncoding = "UTF-8", file = "tab_reports_ressort.csv")
+csv[,-1] <- t(t(csv[,-1]) / colSums(csv[,-1], na.rm = TRUE))
+# write.csv(csv, fileEncoding = "UTF-8", file = "tab_reports_ressort_rel.csv")
+tmp$ressort.y <- factor(tmp$ressort.y, levels = c("Energie", "Technik", "Umwelt", "Klima", "Lebenswiss.", "Medizin"))
+tmp %>% pivot_wider(names_from = Jahr, values_from = n) %>% kable()
+
+# Treffer im Press Clipping
+plot3 <- tmp %>% ggplot(aes(fill = ressort.y, y = n, x = Jahr)) + 
+   geom_bar(position="stack", stat="identity") +
+   labs(title = "c", fill = "Ressort") +
+   scale_fill_brewer(type = "qual", palette = "Paired")
+# Anteil der Themengebiete
+plot4 <- tmp %>% ggplot(aes(fill = ressort.y, y = n, x = Jahr)) + 
+   geom_bar(position="fill", stat="identity") +
+   labs(title = "d", y = "Anteil", fill = "Ressort") +
+   scale_fill_brewer(type = "qual", palette = "Paired")
+grid.arrange(plot1, plot2, nrow=2)
+
+tmp <- grid.arrange(arrangeGrob(plot1, plot2, ncol = 2, top = "SMC-Angebote"),
+                    arrangeGrob(plot3, plot4, ncol = 2, top = "Beiträge aus dem Press Clipping"))
+
+ggsave(filename = "p11_Themengebiete.png", plot = tmp, device = "png", width = 150, height = 150, scale = scale_glob, units = "mm")
+```
+
+#### 1.2 Inwiefern unterscheidet sich die Nutzung von SMC-Material zwischen aktuellenAnlässen innerhalb und außerhalb der Wissenschaft?
+
+```{r}
+left_join(Stamm_Faelle, storyData, by = "storyNo") %>% 
+   group_by(Anlasstyp, Jahr) %>% summarise(n = n()) %>% arrange(Jahr) %>% pivot_wider(names_from = "Jahr", values_from = "n") %>% kable()
+```
+
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% group_by(storyType, Jahr) %>% 
+  summarise(n = n())
+
+plot1 <- tmp %>% ggplot(aes(fill = storyType, y = n, x = Jahr)) + 
+   geom_bar(position="stack", stat="identity")
+plot2 <- tmp %>% ggplot(aes(fill = storyType, y = n, x = Jahr)) + 
+   geom_bar(position="fill", stat="identity")
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+Normiert auf die Aussendungen ohne Investigative:
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% group_by(storyType, Jahr) %>% 
+  filter(storyType %in% c("Research in Context", "Rapid Reaction")) %>% summarise(n = n())
+tmp2 <- storyData %>% group_by(storyType, Jahr) %>% summarise(gesamt = n())
+tmp <- left_join(tmp, tmp2, by = c("storyType", "Jahr")) %>% mutate(ratio = n / gesamt)
+
+plot1 <- tmp %>% ggplot(aes(fill = storyType, y = ratio, x = Jahr)) +
+   scale_fill_brewer(type = "qual", palette = "Set1") +
+   geom_bar(position="dodge", stat="identity") +
+   scale_y_continuous(name = "Durchschnittliche Anzahl Beiträge pro Angebot") +
+   labs(fill = "Angebotstyp")
+
+plot1
+ggsave(filename = "p15_Beitraege_pro_Angebot.png", plot = plot1, device = "png", width = 150, height = 100, scale = scale_glob, units = "mm")
+
+tmp %>% kable()
+```
+
+Vergleich der Themengebiete:
+```{r}
+tmp <- reports %>% select(-ressort) %>% left_join(storyData, by = "storyNo") %>% 
+   group_by(storyType, ressort) %>% 
+   filter(storyType %in% c("Research in Context", "Rapid Reaction")) %>% summarise(n = n())
+tmp2 <- storyData %>% group_by(storyType, ressort) %>% summarise(gesamt = n())
+tmp <- left_join(tmp, tmp2, by = c("storyType", "ressort")) %>% mutate(ratio = n / gesamt) %>% 
+      mutate(ressort = factor(ressort, levels = c("Energie", "Technik", "Umwelt", "Klima", "Lebenswiss.", "Medizin")))
+
+plot1 <- tmp %>% ggplot(aes(fill = ressort, y = ratio, x = storyType)) +
+   scale_fill_brewer(type = "qual", palette = "Paired") +
+   geom_bar(position="dodge", stat="identity") +
+   scale_y_continuous(name = "Durchschnittliche Anzahl Beiträge pro Themengebiete") +
+   labs(fill = "Themengebiete")
+
+plot1
+ggsave(filename = "p15_Beitraege_pro_Angebot_Themengebiete.png", plot = plot1, device = "png", width = 150, height = 100, scale = scale_glob, units = "mm")
+
+tmp %>% kable()
+```
+
+#### F1.3 Wie verteilt sich die SMC-Nutzung auf die Mediengattungen?
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% group_by(sourceType, Jahr) %>% summarise(n = n())
+tmp %>% pivot_wider(names_from = Jahr, values_from = n) %>% kable()
+
+plot1 <- tmp %>% ggplot(aes(fill = sourceType, y = n, x = Jahr)) + 
+   geom_bar(position="stack", stat="identity") +
+   labs(title = "Mediengattungen im Pressclipping", fill = "Mediengattung") +
+   scale_fill_brewer(type = "qual", palette = "Pastel1")
+plot2 <- tmp %>% ggplot(aes(fill = sourceType, y = n, x = Jahr)) + 
+   geom_bar(position="fill", stat="identity") +
+   labs(title = "Anteil der Mediengattungen", fill = "Mediengattung", y = "Anteil") +
+   scale_fill_brewer(type = "qual", palette = "Pastel1")
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+#### F1.4 Welche Ressorts greifen SMC-begleitete Anlässe auf?
+
+```{r}
+reports %>% filter(!(ressort == "")) %>%  group_by(ressort) %>% summarise(n = n()) %>% arrange(desc(n)) %>% kable()
+```
+
+#### F1.5 Wie verteilt sich die SMC-Nutzung auf deutsche, österreichische und schweizerische Medien?
+
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% mutate(Laendercode = if_else(!(Laendercode %in% c("AT", "CH", "DE"))|is.na(Laendercode), "sonstige", Laendercode)) %>%  group_by(Laendercode, Jahr) %>% 
+  summarise(n = n()) %>% arrange(desc(n))
+tmp %>% pivot_wider(names_from = Jahr, values_from = n) %>% kable()
+
+plot1 <- tmp %>% ggplot(aes(fill = Laendercode, y = n, x = Jahr)) + 
+   geom_bar(position="stack", stat="identity")
+plot2 <- tmp %>% ggplot(aes(fill = Laendercode, y = n, x = Jahr)) + 
+   geom_bar(position="fill", stat="identity")
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+
+##### Bezug: F2.2 Besteht ein Zusammenhang zwischen der Anzahl sowie der Chronologie der Expertenstatements und ihrer Verwendung durch Journalist*innen?
+
+```{r}
+tmp <- left_join(experts, storyData, by = "storyNo") %>% filter(storyType %in% c("Rapid Reaction", "Research in Context")) %>% group_by(storyNo) %>% summarise(experts = n())
+tmp2 <- left_join(reports, storyData, by = "storyNo") %>% filter(storyType %in% c("Rapid Reaction", "Research in Context")) %>% group_by(storyNo) %>% summarise(reports = n())
+tmp <- left_join(tmp, tmp2, by = "storyNo") %>% mutate(reports = if_else(is.na(reports), 0L, reports))
+cor(tmp$experts, tmp$reports)
+tmp %>% ggplot(aes(y = reports, x = experts)) + 
+   geom_point()
+```
+
+#### F1.7 Welcher Dynamik folgt die Wissenschaftsberichterstattung? Welche Unterschiedegibt es zwischen den verschiedenen Anlasstypen? Welche Medien lassensich als Leitmedien, welche als Follower-Medien bezeichnen? Stimmen sie mit denklassischen Leitmedien überein?
+
+```{r}
+
+alteLabel <- c("", 
+               "direkt via Press Briefing", 
+               "direkt via SMC Aussendung (akkreditierte Journalisten)",
+               "direkt via SMC Int. Aussendung", 
+               "indirekt via Nachrichtenagentur", 
+               "indirekt via SMC Homepage",
+               "indirekt via zitierendem Medium", 
+               "Themen-/ Expertenfindung")
+
+neueLabel <- c("fehlend" , 
+               "Sonstiges",
+               "direkt via SMC-Aussendung",
+               "Sonstiges",
+               "indirekt via Nachrichtenagentur",
+               "Sonstiges",
+               "indirekt via zitierendem Medium",
+               "Themen- und Expertenfindung")
+
+tmp <- left_join(reports, storyData, by = "storyNo") %>% group_by(modeOfUse, Jahr) %>% 
+   mutate(modeOfUse = neueLabel[match(modeOfUse, alteLabel)]) %>% 
+   summarise(n = n()) %>% 
+   mutate(modeOfUse = factor(modeOfUse, levels = c("direkt via SMC-Aussendung", 
+                                                   "indirekt via Nachrichtenagentur", "indirekt via zitierendem Medium", 
+                                                   "Themen- und Expertenfindung", "Sonstiges", "fehlend")))
+
+plot1 <- tmp %>% ggplot(aes(fill = modeOfUse, y = n, x = Jahr)) + 
+   geom_bar(position="stack", stat="identity") +
+   scale_fill_brewer(type = "qual", palette = "Set1")
+plot2 <- tmp %>% ggplot(aes(fill = modeOfUse, y = n, x = Jahr)) + 
+   geom_bar(position="fill", stat="identity") +
+   scale_fill_brewer(type = "qual", palette = "Set1") +
+   scale_y_continuous(name = "Anteil an Beiträgen") +
+   labs(fill = "Verwendungsmodus")
+grid.arrange(plot1, plot2, nrow=2)
+
+ggsave(filename = "p17_modeOfUse.png", plot = plot2, device = "png", width = 150, height = 100, scale = scale_glob, units = "mm")
+
+tmp %>% kable()
+
+```
+
+##### Leitmedien und Follower-Medien der Wissenschaftsberichterstattung & Übereinstimmung klassische Leitmedien 
+
+Einbezogen sind nur Medien mit mehr als fünf nicht-Agentur-Reports. Betrachtet werden nur die Reports, die nicht über eine Nachrichtenagentur gingen.
+```{r}
+RZ <- reports %>% #filter(!(modeOfUse %in% c("indirekt via Nachrichtenagentur"))) %>% 
+   group_by(storyNo) %>% mutate(lag = published - min(published, na.rm = TRUE))
+tmp <- RZ %>% 
+   filter(!(modeOfUse %in% c("indirekt via Nachrichtenagentur"))) %>% 
+   group_by(mediaOutlet) %>% 
+   filter(n() > 5) %>% 
+  summarise(n = n(),
+            t0 = sum(lag == 0, na.rm = TRUE),
+            t1 = sum(lag == 1, na.rm = TRUE),
+            t2 = sum(lag == 2, na.rm = TRUE),
+            t3 = sum(lag == 3, na.rm = TRUE),
+            t4 = sum(lag == 4, na.rm = TRUE),
+            t5 = sum(lag == 5, na.rm = TRUE),
+            t6 = sum(lag == 6, na.rm = TRUE),
+            t7 = sum(lag == 7, na.rm = TRUE),
+            tg7 = sum(lag > 7, na.rm = TRUE),
+            median = median(lag, na.rm = TRUE),
+            mean = round(mean(lag, na.rm = TRUE), 2),
+            median7 = median(lag[lag<=7], na.rm = TRUE),
+            mean7 = round(mean(lag[lag<=7], na.rm = TRUE), 2)
+            ) %>% 
+#   arrange(median, mean) %>% 
+   arrange(median, mean)
+tmp %>% kable()
+write_csv(tmp, path = "t17aLag.csv")
+
+plot1 <- RZ %>% group_by(lag) %>% summarise(n = n()) %>% filter(lag < 14) %>% 
+   ggplot(aes(y = n, x = lag)) + 
+   geom_bar(stat="identity") +
+   xlab("Tag der Veröffentlichung") +
+   ylab("Anzahl Beiträge")
+plot2 <- RZ %>% filter(!(modeOfUse %in% c("indirekt via Nachrichtenagentur"))) %>% 
+   group_by(lag) %>% summarise(n = n()) %>% filter(lag < 14) %>% 
+   ggplot(aes(y = n, x = lag)) + 
+   geom_bar(stat="identity") +
+   xlab("Tag der Veröffentlichung") +
+   ylab("Anzahl Beiträge")
+plot3 <- RZ %>% 
+   left_join(storyData, by = "storyNo") %>% 
+   filter(!(modeOfUse %in% c("indirekt via Nachrichtenagentur")), storyType == "Research in Context") %>% 
+   group_by(lag) %>% summarise(n = n()) %>% filter(lag < 14) %>% 
+   ggplot(aes(y = n, x = lag)) + 
+   geom_bar(stat="identity") +
+   xlab("Tag der Veröffentlichung") +
+   ylab("Anzahl Beiträge")
+plot4 <- RZ %>% 
+   left_join(storyData, by = "storyNo") %>% 
+   filter(!(modeOfUse %in% c("indirekt via Nachrichtenagentur")), storyType == "Rapid Reaction") %>% 
+   group_by(lag) %>% summarise(n = n()) %>% filter(lag < 14) %>% 
+   ggplot(aes(y = n, x = lag)) + 
+   geom_bar(stat="identity") +
+   xlab("Tag der Veröffentlichung") +
+   ylab("Anzahl Beiträge")
+
+grid.arrange(plot1, plot2, plot3, plot4, nrow=2)
+ggsave(filename = "p17a_lags.png", plot = grid.arrange(plot1, plot2, plot3, plot4, nrow=2), device = "png", width = 150, height = 150, scale = scale_glob, units = "mm")
+
+```
+
+
+
+<!-- ##### Research in Context -->
+<!-- ```{r} -->
+<!-- left_join(RZ, storyData, by = "storyNo") %>% filter(storyType == "Research in Context") %>% group_by(mediaOutlet) %>% filter(n() > 5) %>%  -->
+<!--   summarise(t0 = sum(lag == 0, na.rm = TRUE), -->
+<!--             t1 = sum(lag == 1, na.rm = TRUE), -->
+<!--             t2 = sum(lag == 2, na.rm = TRUE), -->
+<!--             t3 = sum(lag == 3, na.rm = TRUE), -->
+<!--             t4 = sum(lag == 4, na.rm = TRUE), -->
+<!--             t5 = sum(lag == 5, na.rm = TRUE), -->
+<!--             t6 = sum(lag == 6, na.rm = TRUE), -->
+<!--             t7 = sum(lag == 7, na.rm = TRUE), -->
+<!--             tg7 = sum(lag > 7, na.rm = TRUE), -->
+<!--             mean = round(mean(lag, na.rm = TRUE), 2), -->
+<!--             median = median(lag, na.rm = TRUE), -->
+<!--             mean7 = round(mean(lag[lag<7], na.rm = TRUE), 2), -->
+<!--             median7 = median(lag[lag<7], na.rm = TRUE) -->
+<!--             ) %>%  -->
+<!-- #   arrange(median, mean) %>%  -->
+<!--    arrange(mean7) %>%  -->
+<!--    kable() -->
+<!-- ``` -->
+
+<!-- ##### Rapid Reaction (mehr als 3) -->
+<!-- ```{r} -->
+<!-- left_join(RZ, storyData, by = "storyNo") %>% filter(storyType == "Rapid Reaction") %>% group_by(mediaOutlet) %>% filter(n() > 3) %>%  -->
+<!--   summarise(t0 = sum(lag == 0, na.rm = TRUE), -->
+<!--             t1 = sum(lag == 1, na.rm = TRUE), -->
+<!--             t2 = sum(lag == 2, na.rm = TRUE), -->
+<!--             t3 = sum(lag == 3, na.rm = TRUE), -->
+<!--             t4 = sum(lag == 4, na.rm = TRUE), -->
+<!--             t5 = sum(lag == 5, na.rm = TRUE), -->
+<!--             t6 = sum(lag == 6, na.rm = TRUE), -->
+<!--             t7 = sum(lag == 7, na.rm = TRUE), -->
+<!--             tg7 = sum(lag > 7, na.rm = TRUE), -->
+<!--             mean = round(mean(lag, na.rm = TRUE), 2), -->
+<!--             median = median(lag, na.rm = TRUE), -->
+<!--             mean7 = round(mean(lag[lag<7], na.rm = TRUE), 2), -->
+<!--             median7 = median(lag[lag<7], na.rm = TRUE) -->
+<!--             ) %>%  -->
+<!-- #   arrange(median, mean) %>%  -->
+<!--    arrange(mean7) %>%  -->
+<!--    kable() -->
+<!-- ``` -->
+
+##### Mediale Selbstreferenz in der Wissenschaftsberichterstattung. Welche Medien referenzieren welche anderen?
+
+Häufigkeiten: indirekt via zitierendem Medium
+```{r}
+reports %>% filter(modeOfUse == "indirekt via zitierendem Medium") %>% group_by(mediaOutlet) %>% summarise(n = n()) %>% arrange(desc(n)) %>% kable()
+
+reports %>% filter(modeOfUse == "indirekt via zitierendem Medium") %>% group_by(mediaOutlet) %>% filter(n()>1) %>% 
+  select(-storyNo) %>% kable()
+```
+
+#### F1.6 Auf welchem Weg gelangt SMC-Material in die Medien? Welchen Einflusshaben Nachrichtenagenturen auf die Wissenschaftsberichterstattung? Inwiefernfindet sich mediale Selbstreferenz in der Wissenschaftsberichterstattung wieder?
+
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% filter(storyType %in% c("Research in Context", "Rapid Reaction")) %>% 
+   mutate(Nachrichtenagentur = if_else(modeOfUse == "indirekt via Nachrichtenagentur", "Agentur", "eigen")) %>% group_by(storyType, Nachrichtenagentur) %>% summarise(n = n())
+tmp %>% pivot_wider(names_from = "Nachrichtenagentur", values_from = n) %>% kable()
+tmp %>% group_by(storyType) %>% mutate(n = n / sum(n))%>% pivot_wider(names_from = "Nachrichtenagentur", values_from = n) %>% kable()
+```
+
+```{r}
+plot1 <- tmp %>% ggplot(aes(fill = Nachrichtenagentur, y = n, x = storyType)) + 
+   geom_bar(position="stack", stat="identity")
+plot2 <- tmp %>% ggplot(aes(fill = Nachrichtenagentur, y = n, x = storyType)) + 
+   geom_bar(position="fill", stat="identity")
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+##### Nach Ländern
+
+Deutschland
+```{r}
+tmp <- left_join(reports, storyData, by = "storyNo") %>% 
+   filter(storyType %in% c("Research in Context", "Rapid Reaction"), Laendercode %in% c("DE", "AT", "CH")) %>% 
+   mutate(Nachrichtenagentur = if_else(modeOfUse == "indirekt via Nachrichtenagentur", "Agentur", "eigen")) %>% 
+   group_by(Laendercode, Nachrichtenagentur) %>% summarise(n = n())
+tmp %>% pivot_wider(names_from = "Nachrichtenagentur", values_from = n) %>% kable()
+tmp %>% group_by(Laendercode) %>% mutate(n = n / sum(n))%>% pivot_wider(names_from = "Nachrichtenagentur", values_from = n) %>% kable()
+```
+
+```{r}
+plot1 <- tmp %>% ggplot(aes(fill = Nachrichtenagentur, y = n, x = Laendercode)) + 
+   geom_bar(position="stack", stat="identity")
+plot2 <- tmp %>% ggplot(aes(fill = Nachrichtenagentur, y = n, x = Laendercode)) + 
+   geom_bar(position="fill", stat="identity")
+grid.arrange(plot1, plot2, nrow=2)
+```
+
+
+
+#### F1.8 Wie lässt sich die Berichterstattung über neue Studienergebnisse mit SMCBeteiligung charakterisieren? Wie hoch ist die Diversität an Fachjournalen, welchenEinfluss hat das Journal, welchen das Embargo?
+
+##### Einfluss hat das Embargo auf Umfang und Kongruenz
+```{r}
+tmp <- storyData %>% 
+   filter(journal %in% embargo$journal) %>% left_join(embargo, by = "journal")
+tmp2 <- reports %>% group_by(storyNo) %>% summarise(n = n())
+tmp <- left_join(tmp, tmp2, by = "storyNo") %>% mutate(n = if_else(is.na(n), 0L, n))
+
+cor(tmp$n, tmp$embargo, use = "complete.obs")
+```
+
+##### Einfluss Journal
+```{r}
+tmp <- storyData %>% 
+   mutate(journal = if_else(journal == "Diabetes Care, Nature", "Diabetes Care", journal)) %>% 
+   mutate(journal = if_else(journal == "Science, Science Immunology", "Science", journal)) %>% 
+   filter(!(journal == "" | journal == "Old_Data_Import")) %>% left_join(embargo, by = "journal") 
+tmp2 <- reports %>% group_by(storyNo) %>% summarise(n = n())
+tmp <- left_join(tmp, tmp2, by = "storyNo") %>% mutate(n = if_else(is.na(n), 0L, n))
+
+tmp %>% group_by(journal) %>% summarise(nStorys = n(), max = max(n), mean = mean(n), median = median(n)) %>% arrange(desc(median)) %>% kable()
+
+tmp %>% group_by(journal) %>% summarise(nStorys = n(), mean = mean(n)) %>% arrange(desc(mean)) %>% filter(nStorys > 1) %>% kable()
+
+ImpactFactors <- read_csv2("Journale_ImpactFactor_nacherhoben_EXPORT_MH.csv") 
+
+tmp3 <- tmp %>% group_by(journal) %>% summarise(nStorys = n(), max = max(n), mean = mean(n), median = median(n), nreports = sum(n)) %>% 
+   arrange(desc(median)) %>% 
+   left_join(ImpactFactors, by = "journal") %>% 
+   left_join(embargo, by = "journal") %>% 
+   select(-c("publisher", "embargoPublisher")) 
+
+tmp3 %>% kable()
+
+cor(tmp3$nStorys, tmp3$embargo, use = "complete.obs")
+cor(tmp3$nreports, tmp3$embargo, use = "complete.obs")
+
+cor(tmp3$nStorys, tmp3$`5-Jahres IF`, use = "complete.obs")
+cor(tmp3$nreports, tmp3$`5-Jahres IF`, use = "complete.obs")
+```
+
+### F2 Wie schlägt sich durch das SMC bereitgestelltes Material in der Wissenschaftsberichterstattung von kongruent aufgegriffenen Anlässen nieder?
+
+#### F2.1 Wie ist ein typischer Beitrag hinsichtlich Länge, prozentualem Anteil von SMC-Material, dessen Position und Quellennennung aufgebaut? Gibt es Unterschiede zwischen den Mediengattungen und den verschiedenen Anlasstypen?
+
+##### Länge der Beiträge gesamt
+```{r}
+Inhaltsanalyse %>% 
+   summarise(mean = mean(Laenge_Beitrag), min = min(Laenge_Beitrag), Q1 = quantile(Laenge_Beitrag, 0.25), 
+             median = median(Laenge_Beitrag), Q3 = quantile(Laenge_Beitrag, 0.75), max = max(Laenge_Beitrag)) %>% kable(digits = 3)
+```
+
+##### Länge der Beiträge SMC
+```{r}
+Inhaltsanalyse %>% filter(!Kontrolle) %>% 
+   summarise(mean = mean(Laenge_Beitrag), min = min(Laenge_Beitrag), Q1 = quantile(Laenge_Beitrag, 0.25), 
+             median = median(Laenge_Beitrag), Q3 = quantile(Laenge_Beitrag, 0.75), max = max(Laenge_Beitrag)) %>% kable(digits = 3)
+```
+
+##### Länge der Beiträge Online / Print
+```{r}
+Inhaltsanalyse %>% group_by(Mediengattung) %>% 
+   summarise(mean = mean(Laenge_Beitrag), min = min(Laenge_Beitrag), Q1 = quantile(Laenge_Beitrag, 0.25), 
+             median = median(Laenge_Beitrag), Q3 = quantile(Laenge_Beitrag, 0.75), max = max(Laenge_Beitrag), n = n()) %>% kable(digits = 3)
+```
+
+##### Länge der Beiträge Online / Print
+```{r}
+Inhaltsanalyse %>% left_join(storyData, by = c(id_global = "storyNo")) %>% group_by(storyType) %>% 
+   summarise(mean = mean(Laenge_Beitrag), min = min(Laenge_Beitrag), Q1 = quantile(Laenge_Beitrag, 0.25), 
+             median = median(Laenge_Beitrag), Q3 = quantile(Laenge_Beitrag, 0.75), max = max(Laenge_Beitrag), n = n()) %>% kable(digits = 3)
+```
+
+##### Anteil SMC-Material in den Fällen
+```{r}
+Inhaltsanalyse %>% filter(!Kontrolle) %>% 
+   mutate(SMC_Anteil = Laenge_SMC_Material / Laenge_Beitrag) %>% 
+   summarise(mean = mean(SMC_Anteil), min = min(SMC_Anteil), Q1 = quantile(SMC_Anteil, 0.25), median = median(SMC_Anteil), Q3 = quantile(SMC_Anteil, 0.75), max = max(SMC_Anteil)) %>% kable(digits = 3)
+```
+
+##### Position SMC-Material
+```{r}
+Inhaltsanalyse %>% filter(!Kontrolle) %>% group_by(Position_SMC_Material) %>% summarise(n = n(), rel = n()/100)
+
+Inhaltsanalyse %>% filter(!Kontrolle) %>% left_join(storyData, by = c(id_global = "storyNo")) %>% 
+   group_by(storyType, Position_SMC_Material) %>% summarise(n = n(), rel = n()/100)
+```
+
+##### Nennung SMC
+```{r}
+Inhaltsanalyse %>% filter(!Kontrolle) %>% group_by(SMC_als_Quelle) %>% summarise(n = n(), rel = n()/100)
+
+Inhaltsanalyse %>% filter(!Kontrolle) %>% left_join(storyData, by = c(id_global = "storyNo")) %>% 
+   group_by(SMC_als_Quelle, Position_SMC_Material) %>% summarise(n = n(), rel = n()/100)
+
+```
+
+##### Zu F3.1: Zitatanteil Fälle vs Kontrollen
+```{r}
+expertsIA %>% group_by(id) %>% summarise(sumZitatlaenge = sum(Zitatlaenge)) %>% left_join(Inhaltsanalyse, by = "id") %>% 
+   mutate(SMC_Anteil = sumZitatlaenge / Laenge_Beitrag) %>% group_by(Kontrolle) %>% 
+   summarise(mean = mean(SMC_Anteil), min = min(SMC_Anteil), Q1 = quantile(SMC_Anteil, 0.25), median = median(SMC_Anteil), Q3 = quantile(SMC_Anteil, 0.75), max = max(SMC_Anteil)) %>% kable(digits = 3)
+
+tmp <- expertsIA %>% group_by(id) %>% summarise(sumZitatlaenge = sum(Zitatlaenge)) %>% left_join(Inhaltsanalyse, by = "id") %>% 
+   #mutate(SMC_Anteil = sumZitatlaenge / Laenge_Beitrag) %>% 
+   group_by(Kontrolle) %>% summarise(x = sum(sumZitatlaenge), n = sum(Laenge_Beitrag)) %>% mutate(p = x/n)
+fisher.test(tmp[1:2,2:3])
+
+tmp <- expertsIA %>% group_by(id) %>% summarise(sumZitatlaenge = sum(Zitatlaenge)) %>% left_join(Inhaltsanalyse, by = "id") %>% 
+   mutate(SMC_Anteil = sumZitatlaenge / Laenge_Beitrag)
+
+t.test(y = tmp$SMC_Anteil[tmp$Kontrolle], x = tmp$SMC_Anteil[!tmp$Kontrolle])
+
+sd(tmp$SMC_Anteil[tmp$Kontrolle])
+
+sd(tmp$SMC_Anteil[!tmp$Kontrolle])
+```
+
+
+```{r}
+plot1 <- expertsIA %>% group_by(id) %>% summarise(sumZitatlaenge = sum(Zitatlaenge)) %>% left_join(Inhaltsanalyse, by = "id") %>% 
+   mutate(SMC_Anteil = sumZitatlaenge / Laenge_Beitrag, 
+          Kontrolle_label = if_else(Kontrolle, "Kontrollen", "Fälle")) %>% 
+   ggplot(aes(y = SMC_Anteil*100, x = Kontrolle_label)) + 
+   geom_boxplot() +
+   scale_color_brewer(type = "qual", palette = "Set1") +
+   ylab("Zitatanteil pro Beitrag in Prozent") +
+   theme(legend.title = element_blank()) + 
+   scale_x_discrete(name = NULL)
+
+
+plot1
+ggsave(filename = "p21_Zitatlaenge.png", plot = plot1, device = "png", width = 150, height = 150, scale = scale_glob, units = "mm")
+```
+
+##### Zitatlänge SMC-vermittelt
+```{r}
+expertsIA %>% group_by(SMC_verm) %>% 
+   summarise(mean = mean(Zitatlaenge), min = min(Zitatlaenge), Q1 = quantile(Zitatlaenge, 0.25), median = median(Zitatlaenge), Q3 = quantile(Zitatlaenge, 0.75), max = max(Zitatlaenge)) %>% kable(digits = 3)
+```
+
+##### Expert*innen Länder
+```{r}
+expertsIA %>% group_by(Land) %>% summarise(n = n()) %>% kable()
+expertsIA %>% group_by(Land, SMC_verm) %>% summarise(n = n()) %>% pivot_wider(names_from = SMC_verm, values_from = n) %>% kable()
+expertsIA %>% group_by(Land, SMC_verm) %>% summarise(n = n()) %>% group_by(SMC_verm) %>% 
+   mutate(rel = n/sum(n, na.rm = TRUE)) %>% select(-n) %>%  pivot_wider(names_from = SMC_verm, values_from = rel) %>% kable(digits = 3)
+```
+
+##### Zu F3.3: unbeteiligte Expert*innen Anzahl
+```{r}
+expertsIA %>% group_by(Kontrolle) %>% filter(Beteiligung == "unbeteiligt") %>% summarise(n = n()) %>% kable()
+
+tmp <- expertsIA %>% group_by(id, Kontrolle) %>% filter(Beteiligung == "unbeteiligt") %>% summarise(n = n())
+table(tmp[tmp$Kontrolle,]$n)
+table(tmp[!tmp$Kontrolle,]$n)
+```
+
+Häufigkeitstabelle Anzahl unbeteiligte Expert\*innen Kontrollen
+```{r}
+table(c(tmp[tmp$Kontrolle,]$n, rep(0, 100-length(tmp[tmp$Kontrolle,]$n))))
+```
+
+Häufigkeitstabelle Anzahl unbeteiligte Expert\*innen Fälle
+```{r}
+table(c(tmp[!tmp$Kontrolle,]$n, rep(0, 100-length(tmp[!tmp$Kontrolle,]$n))))
+```
+
+##### Zu F3.3 unbeteiligte vs beteiligte Expert*innen Anzahl Worte
+Wichtig: Hier ist die Grundgesamtheit die Gesamtheit der Expert\*innen. Da es ja auch viele Beiträge ohne unbeteiligte Expert\*innen gibt und die Zahl der Expert\*innen pro Text unterschiedlich ist, sind keine Aussagen auf Text-Ebene möglich.
+```{r}
+expertsIA %>% group_by(Kontrolle, Beteiligung) %>% summarise(`mittlere Zahl Wörter` = mean(Zitatlaenge)) %>% kable(digits = 0)
+```
+
+Hier jetzt die Betrachtung auf Text-Ebene. Texte ohne unbeteiligte Expert\*innen werden hier mit 0 mitgezählt.
+```{r}
+expertsIA %>% group_by(Kontrolle, Beteiligung) %>% summarise(`Zahl Wörter` = sum(Zitatlaenge)/100) %>% kable(digits = 0)
+```
+
+##### Zu F3.3: Anzahl SMC vs nicht SMC Expert*innen
+```{r}
+expertsIA %>% filter(!Kontrolle) %>% group_by(SMC_verm) %>% summarise(n = n()) %>% kable(digits = 0)
+```
+
+##### Zu F3.3: Expert*innen nach Land
+Kontrollen
+```{r}
+tmp <- table(expertsIA$Land[expertsIA$Kontrolle])
+tibble(Land = names(tmp), n = as.integer(tmp)) %>% mutate(Anteil = n / sum(n)) %>% kable(digits = 1)
+```
+
+Fälle
+```{r}
+tmp <- table(expertsIA$Land[!expertsIA$Kontrolle])
+tibble(Land = names(tmp), n = as.integer(tmp)) %>% mutate(Anteil = n / sum(n)) %>% kable(digits = 1)
+```
+
+
+##### Länge der Artikel mit SMC (Fälle) – Online/Print
+```{r}
+Inhaltsanalyse %>% 
+   filter(!Kontrolle) %>% 
+   group_by(Mediengattung) %>% 
+   summarise(mean = mean(Laenge_Beitrag), min = min(Laenge_Beitrag), Q1 = quantile(Laenge_Beitrag, 0.25), 
+             median = median(Laenge_Beitrag), Q3 = quantile(Laenge_Beitrag, 0.75), max = max(Laenge_Beitrag), n = n()) %>% 
+   kable(digits = 3)
+```
+       
+##### Anteil SMC-Material in Online/Print der Fälle
+```{r}
+Inhaltsanalyse %>% 
+   filter(!Kontrolle) %>% 
+   group_by(Mediengattung) %>% 
+   mutate(SMC_Anteil = Laenge_SMC_Material / Laenge_Beitrag) %>% 
+   summarise(mean = mean(SMC_Anteil), min = min(SMC_Anteil), Q1 = quantile(SMC_Anteil, 0.25), 
+             median = median(SMC_Anteil), Q3 = quantile(SMC_Anteil, 0.75), max = max(SMC_Anteil)) %>% 
+   kable(digits = 3)
+```
+
+
+##### Zu F3.3: Mittlere Zitatlänge beteiligt vs unbeteiligt
+```{r}
+expertsIA %>% group_by(Beteiligung) %>% summarise(`mittlere Zahl Wörter` = mean(Zitatlaenge)) %>% kable(digits = 0)
+```
+
+
+##### Expertys Geschlecht Fall / Kontrolle
+```{r}
+expertsIA %>% group_by(Kontrolle, Geschlecht) %>% summarise(n = n()) %>% pivot_wider(names_from = Geschlecht, values_from = n) %>% kable()
+```
+
+##### Expertys Zitatlängen
+```{r}
+expertsIA %>% group_by(Kontrolle) %>% 
+   summarise(mean = mean(Zitatlaenge), min = min(Zitatlaenge), Q1 = quantile(Zitatlaenge, 0.25), median = median(Zitatlaenge), Q3 = quantile(Zitatlaenge, 0.75), max = max(Zitatlaenge)) %>% kable(digits = 3)
+```
+
+
+
+#### F2.2 Welchen Einfluss hat der Umfang von SMC-Angeboten und Länge der Expertenstatements auf die Verwendung?
+
+##### Story-Ebene
+
+keine größeren Korrelationen auf Story-Ebene
+```{r}
+tmp <- citations %>% 
+   filter(storyNo %in% Stamm_Faelle$storyNo) %>% 
+   group_by(storyNo) %>% 
+   summarise(Expertentreffer = n())
+tmp <- Stamm_Faelle %>% 
+   select(storyNo, Gesamtlaenge_SMC_story, Laenge_Teaser) %>% 
+   distinct() %>% 
+   left_join(tmp, by = "storyNo")
+cor(tmp$Gesamtlaenge_SMC_story, tmp$Laenge_Teaser)
+cor(tmp$Gesamtlaenge_SMC_story, tmp$Expertentreffer)
+cor(tmp$Laenge_Teaser, tmp$Expertentreffer)
+```
+
+
+```{r}
+tmp <- reports %>% 
+   filter(storyNo %in% Stamm_Faelle$storyNo) %>% 
+   group_by(storyNo) %>% 
+   summarise(Anzahl_reports = n())
+tmp <- Stamm_Faelle %>% 
+   select(storyNo, Gesamtlaenge_SMC_story, Laenge_Teaser) %>% 
+   distinct() %>% 
+   left_join(tmp, by = "storyNo")
+cor(tmp$Gesamtlaenge_SMC_story, tmp$Anzahl_reports)
+cor(tmp$Laenge_Teaser, tmp$Anzahl_reports)
+```
+
+
+##### Expert*innen-Ebene
+
+Kein globaler Effekt:
+```{r}
+tmp <- citations %>% filter(storyNo %in% Stamm_Faelle$storyNo) %>% group_by(storyNo, civiId) %>% summarise(Expertentreffer = n())
+tmp2 <- experts %>% select(storyNo, id, displayName, contactId)
+tmp <- left_join(tmp, tmp2, by = c("storyNo", civiId = "contactId")) %>% arrange(storyNo, id)
+tmp <- left_join(Stamm_Faelle, tmp, by = c("storyNo", Name_Expert = "displayName")) %>% mutate(Expertentreffer = if_else(is.na(Expertentreffer), 0L, Expertentreffer))
+
+cor(tmp$Laenge_Statement, tmp$Expertentreffer)
+```
+
+Auch innerhalb der Storys zeigt sich kein eindeutiges Bild.
+```{r}
+tmp %>% group_by(storyNo) %>% summarise(cor = cor(Laenge_Statement, Expertentreffer)) %>% kable()
+```
+
+### F3 Wie unterscheidet sich die Wissenschaftsberichterstattung zwischen kongruent berichteten Anlässen mit SMC-Beteiligung und ohne?
+
+#### F3.1 Welche formalen Unterschiede hinsichtlich Länge des Artikels, Urheber undverantwortlichem Ressort gibt es?
+
+##### Länge des Beitrags
+```{r}
+Inhaltsanalyse %>% group_by(Kontrolle) %>% 
+   summarise(mean = mean(Laenge_Beitrag), min = min(Laenge_Beitrag), 
+             Q1 = quantile(Laenge_Beitrag, 0.25), median = median(Laenge_Beitrag), 
+             Q3 = quantile(Laenge_Beitrag, 0.75), max = max(Laenge_Beitrag)) %>% kable(digits = 3)
+```
+
+```{r}
+plot1 <- Inhaltsanalyse %>% 
+   mutate(Kontrolle_label = if_else(Kontrolle, "Kontrollen", "Fälle")) %>% 
+   ggplot(aes(y = Laenge_Beitrag, x = Kontrolle_label)) + 
+   geom_boxplot() +
+   scale_color_brewer(type = "qual", palette = "Set1") +
+   ylab("Beitragslänge in Worten") +
+   theme(legend.title = element_blank()) + 
+   scale_x_discrete(name = NULL)
+
+
+plot1
+ggsave(filename = "p31_Beitragslaenge.png", plot = plot1, device = "png", width = 150, height = 150, scale = scale_glob, units = "mm")
+```
+
+
+
+##### Urheber*in
+```{r}
+Inhaltsanalyse %>% group_by(Kontrolle, UrheberIn) %>% 
+   summarise(n = n()) %>% pivot_wider(names_from = UrheberIn, values_from = n) %>% kable()
+```
+
+##### Nachrichtenagentur
+```{r}
+Inhaltsanalyse %>% group_by(Kontrolle, Nachrichtenagentur1) %>% 
+   summarise(n = n()) %>% pivot_wider(names_from = Nachrichtenagentur1, values_from = n) %>% kable()
+```
+
+##### Ressort
+```{r}
+Inhaltsanalyse %>% group_by(Ressort, Kontrolle) %>% summarise(n = n()) %>% pivot_wider(names_from = "Ressort", values_from = "n") %>% kable()
+
+tmp <- bind_rows(Stamm_Faelle, Stamm_Kontrollen) %>% select(storyNo, Anlasstyp) %>% distinct()
+tmp2 <- Inhaltsanalyse %>% 
+   mutate(id_global = if_else(is.na(as.numeric(id_global)), str_extract(Inhaltsanalyse$id_global, pattern = "K[0-9]"), id_global))
+left_join(tmp2, tmp, by = c("id_global" = "storyNo")) %>% 
+   group_by(Anlasstyp) %>% summarise(n = n()) %>% kable()
+```
+
+```{r}
+tmp <- bind_rows(Stamm_Faelle, Stamm_Kontrollen) %>% select(storyNo, Anlasstyp) %>% distinct() 
+tmp2 <- Inhaltsanalyse %>% mutate(id_global = if_else(is.na(as.numeric(id_global)), str_extract(Inhaltsanalyse$id_global, pattern = "K[0-9]"), id_global))
+
+left_join(tmp2, tmp, by = c("id_global" = "storyNo")) %>% 
+   group_by(Kontrolle, Anlasstyp) %>% 
+   summarise(mean = mean(Laenge_Beitrag), 
+             min = min(Laenge_Beitrag), 
+             Q1 = quantile(Laenge_Beitrag, 0.25), 
+             median = median(Laenge_Beitrag), 
+             Q3 = quantile(Laenge_Beitrag, 0.75), 
+             max = max(Laenge_Beitrag), n = n()) %>% 
+   kable()
+```
+
+```{r}
+tmp <- left_join(tmp2, tmp, by = c("id_global" = "storyNo")) %>% 
+   select(Kontrolle, wiss_Experten, Politiker, Wirtschaft, NGO, Anlasstyp) %>% 
+   pivot_longer(cols = c("wiss_Experten", "Politiker", "Wirtschaft", "NGO")) %>% 
+   group_by(Anlasstyp, Kontrolle, name) %>% 
+   summarise(mean = mean(value), 
+             min = min(value), 
+             Q1 = quantile(value, 0.25), 
+             median = median(value), 
+             Q3 = quantile(value, 0.75), 
+             max = max(value), 
+             n = n(), 
+             nicht_null = sum(value > 0)) %>% arrange(name)
+
+tmp %>% 
+   filter(Anlasstyp == "aktuell, nicht wissenschaftsgeneriert") %>% 
+   ungroup() %>% 
+   select(-"Anlasstyp") %>% 
+   kable(digits = 3)
+
+tmp %>% 
+   filter(Anlasstyp == "aktuell, wissenschaftsgeneriert") %>% 
+   ungroup() %>% 
+   select(-"Anlasstyp") %>% 
+   kable(digits = 3)
+```
+
+
+
+#### F3.2 Wie unterscheidet sich die Anzahl der verwendeten Quellen?
+##### Anzahl wiss. Primärquellen
+```{r}
+Inhaltsanalyse %>% group_by(Kontrolle) %>% 
+   summarise(mean = mean(wiss_Primaerquellen), min = min(wiss_Primaerquellen), 
+             Q1 = quantile(wiss_Primaerquellen, 0.25), median = median(wiss_Primaerquellen), 
+             Q3 = quantile(wiss_Primaerquellen, 0.75), max = max(wiss_Primaerquellen)) %>% kable(digits = 3)
+
+Inhaltsanalyse %>% group_by(Kontrolle, wiss_Primaerquellen) %>% summarise(n = n()) %>% pivot_wider(names_from = wiss_Primaerquellen, values_from = n) %>% kable()
+```
+
+#### F3.3 Wie sind die Akteurskonstellationen in den Beiträgen mit und ohne SMC-Materialbeschaffen? Wie viele wissenschaftliche Expert*innen kommen im Mittel zu Wort, wie viele andere Akteur*innen? Wie viele davon sind am Anlass unbeteiligt? 
+
+
+```{r}
+Inhaltsanalyse %>% select(Kontrolle, wiss_Experten, Politiker, Wirtschaft, NGO) %>% 
+   pivot_longer(cols = c("wiss_Experten", "Politiker", "Wirtschaft", "NGO"))%>% group_by(Kontrolle, name) %>%  
+   summarise(mean = mean(value), min = min(value), 
+             Q1 = quantile(value, 0.25), median = median(value), 
+             Q3 = quantile(value, 0.75), max = max(value), n = n(), nicht_null = sum(value > 0)) %>% arrange(name) %>%  kable(digits = 3)
+```
+
+##### beteiligt vs unbeteiligt
+```{r}
+expertsIA %>% group_by(Kontrolle, Beteiligung) %>% 
+   summarise(n = n()) %>% pivot_wider(names_from = Beteiligung, values_from = n) %>% kable()
+```
+
+##### beteiligt vs unbeteiligt Wortbeiträge
+```{r}
+expertsIA %>% select(Kontrolle, Beteiligung, Zitatlaenge) %>% 
+   group_by(Kontrolle, Beteiligung) %>%  
+   summarise(mean = mean(Zitatlaenge), min = min(Zitatlaenge), 
+             Q1 = quantile(Zitatlaenge, 0.25), median = median(Zitatlaenge), 
+             Q3 = quantile(Zitatlaenge, 0.75), max = max(Zitatlaenge)) %>% arrange(Beteiligung) %>%  kable(digits = 3)
+```
+
+##### Gender
+Expert\*innennutzung in den Aussendungen
+```{r}
+experts <- experts %>% mutate(Vorname = sapply(displayName, function(x)str_split(x, " ")[[1]][1]))
+
+# Vornamen <- sort(unique(experts$Vorname))
+# VornamenGender <- gender(Vornamen, method = "genderize")
+# VornamenGender$gender[is.na(VornamenGender$gender)] <- "male"
+# save(VornamenGender, file = "VornamenGender.RData")
+
+load("VornamenGender.RData")
+tmp <- VornamenGender %>% select(name, gender)
+experts <- left_join(experts, tmp, by = c("Vorname" = "name"))
+experts %>% group_by(gender) %>% summarise(n = n()) %>% kable()
+```
+
+```{r}
+tmp <- experts %>% select(contactId, gender) %>% distinct()
+citations %>% left_join(tmp, by = c(civiId = "contactId")) %>% group_by(gender) %>% summarise(n = n()) %>% kable()
+```
+
+
+### Gini-Reports, zu Kongruenzgrad in SMC-Angeboten
+
+```{r}
+tmp <- reports %>% group_by(storyNo) %>% summarise(n = n())
+
+ggplot(tmp, aes(n)) +
+   stat_lorenz() +
+   coord_fixed() +
+   geom_abline(linetype = "dashed") +
+   theme_minimal() + 
+   labs(x = "Anteil an SMC-Angeboten", y = "Anteil an Beiträgen")
+Gini(tmp$n)
+
+tmp %>% group_by(n) %>% summarise(y = n()) %>% 
+   ggplot(aes(x = n, y = y)) +
+   geom_bar(stat="identity")
+```
+
+<!-- ```{r} -->
+<!-- powerlaw_fit <- displ$new(tmp$n) # Objekt fuer poweRlaw erzeugen -->
+<!-- ##Xmin und alpha schaetzen, xmin ueber KS-Ansatz, alpha mit MLE, dann als Parameter des Power Law-Objekts setzen. -->
+
+<!-- x_min <- estimate_xmin(powerlaw_fit) # xmin schaetzen -->
+<!-- powerlaw_fit$setXmin(x_min) -->
+
+<!-- est_pars <- estimate_pars(powerlaw_fit) -->
+<!-- powerlaw_fit$setPars(est_pars) -->
+
+<!-- ##Erste Visualisierung der Daten als CCDF, mit Lines wird die geschaetzte Power Law-Verteilung eingezeichnet. -->
+
+<!-- plot(powerlaw_fit) -->
+<!-- lines(powerlaw_fit, col = "red") -->
+
+<!-- ## Bootstrap -->
+<!-- bs <- bootstrap(powerlaw_fit, no_of_sims = 1000, threads = 11) -->
+<!-- sd(bs$bootstraps[,2]) # sd xmin -->
+<!-- sd(bs$bootstraps[,3]) # sd pars -->
+
+<!-- ##Hier werden die Ergebnisse des Bootstrappings visualisiert. -->
+<!-- hist(bs$bootstraps[,2], breaks="fd") -->
+<!-- hist(bs$bootstraps[,3], breaks="fd") -->
+<!-- plot(jitter(bs$bootstraps[,2], factor=1.2), bs$bootstraps[,3]) -->
+
+<!-- bs_p <- bootstrap_p(powerlaw_fit, no_of_sims = 1000, threads = 11) -->
+<!-- bs_p$p -->
+
+<!-- ## andere Verteilungen -->
+
+<!-- lognormal_fit <- dislnorm$new(tmp$n) -->
+<!-- lognormal_fit$setXmin(powerlaw_fit$getXmin()) -->
+<!-- lognormal_fit$setPars(estimate_pars(lognormal_fit)) -->
+
+<!-- exponential_fit <- disexp$new(tmp$n) -->
+<!-- exponential_fit$setXmin(powerlaw_fit$getXmin()) -->
+<!-- exponential_fit$setPars(estimate_pars(exponential_fit)) -->
+
+<!-- poisson_fit <- dispois$new(tmp$n) -->
+<!-- poisson_fit$setXmin(powerlaw_fit$getXmin()) -->
+<!-- poisson_fit$setPars(estimate_pars(poisson_fit)) -->
+
+<!-- ## fits der verschiedenen Verteilungen -->
+<!-- plot(lognormal_fit, ylab="CDF") -->
+<!-- lines(powerlaw_fit) -->
+<!-- lines(lognormal_fit, col=2, lty=2) -->
+<!-- lines(exponential_fit, col = "green", lty=2) -->
+<!-- lines(poisson_fit, col="blue", lty=3) -->
+<!-- ``` -->
+
+
+
+
+#### Zu F1.6: Reports pro Agenturmeldung
+
+```{r}
+Agenturstories <- reports %>% filter(modeOfUse == "indirekt via Nachrichtenagentur") %>% group_by(storyNo) %>% summarise(n = n())
+t(summary(Agenturstories$n)) %>% kable()
+```
+
+
+##### Treffer nach *sourceType* und *modeOfUse*.
+```{r}
+reports %>% group_by(sourceType) %>% count(modeOfUse) %>% mutate(rel = n / sum(n)) %>% 
+  group_by() %>%  mutate(rel_gesamt = n / sum(n)) %>%  kable()
+```
+
+#### Zu F1.7: Reaktionszeit der Medien
+
+```{r}
+RZ <- reports %>% group_by(storyNo) %>% mutate(lag = published - min(published, na.rm = TRUE))
+RZ %>% group_by(mediaOutlet) %>% filter(n() > 5) %>% 
+  summarise(t0 = sum(lag == 0, na.rm = TRUE),
+            t1 = sum(lag == 1, na.rm = TRUE),
+            t2 = sum(lag == 2, na.rm = TRUE),
+            t3 = sum(lag == 3, na.rm = TRUE),
+            t4 = sum(lag == 4, na.rm = TRUE),
+            t5 = sum(lag == 5, na.rm = TRUE),
+            t6 = sum(lag == 6, na.rm = TRUE),
+            t7 = sum(lag == 7, na.rm = TRUE),
+            tg7 = sum(lag > 7, na.rm = TRUE),
+            mean = round(mean(lag, na.rm = TRUE), 2),
+            median = median(lag, na.rm = TRUE)) %>% 
+  arrange(median, mean) %>% kable()
+```
+
+
+
+##### Media Outlets mit mehr als 10 Treffern
+```{r}
+mediaOutletCount <- reports %>% count(mediaOutlet) %>% arrange(desc(n)) %>% filter(n > 10)
+mediaOutletCount %>% kable()
+```
+
+
+```{r}
+tmp <- RZ %>% group_by(mediaOutlet) %>% 
+  summarise(t0 = sum(lag == 0, na.rm = TRUE),
+            t1 = sum(lag == 1, na.rm = TRUE),
+            t2 = sum(lag == 2, na.rm = TRUE),
+            t3 = sum(lag == 3, na.rm = TRUE),
+            t4 = sum(lag == 4, na.rm = TRUE),
+            t5 = sum(lag == 5, na.rm = TRUE),
+            t6 = sum(lag == 6, na.rm = TRUE),
+            t7 = sum(lag == 7, na.rm = TRUE),
+            tg7 = sum(lag > 7, na.rm = TRUE),
+            mean = round(mean(lag, na.rm = TRUE), 2),
+            median = median(lag, na.rm = TRUE)) %>% 
+  arrange(median, mean)
+
+reports %>% 
+   group_by(mediaOutlet) %>% 
+   summarise(n = n(), Nachrichtenagentur = sum(modeOfUse == "indirekt via Nachrichtenagentur")) %>% 
+   arrange(desc(n)) %>% 
+   full_join(tmp, by = "mediaOutlet") %>% 
+   write_csv("Dynamik_alle_Medien.csv")
+```
+
+
+```{r}
+tmp <- RZ %>% 
+   filter(!(modeOfUse %in% c("indirekt via Nachrichtenagentur"))) %>% 
+   group_by(mediaOutlet) %>% 
+  summarise(t0 = sum(lag == 0, na.rm = TRUE),
+            t1 = sum(lag == 1, na.rm = TRUE),
+            t2 = sum(lag == 2, na.rm = TRUE),
+            t3 = sum(lag == 3, na.rm = TRUE),
+            t4 = sum(lag == 4, na.rm = TRUE),
+            t5 = sum(lag == 5, na.rm = TRUE),
+            t6 = sum(lag == 6, na.rm = TRUE),
+            t7 = sum(lag == 7, na.rm = TRUE),
+            tg7 = sum(lag > 7, na.rm = TRUE),
+            mean = round(mean(lag, na.rm = TRUE), 2),
+            median = median(lag, na.rm = TRUE)) %>% 
+  arrange(median, mean)
+
+reports %>% 
+   group_by(mediaOutlet) %>% 
+   summarise(n = n(), Nachrichtenagentur = sum(modeOfUse == "indirekt via Nachrichtenagentur")) %>% 
+   arrange(desc(n)) %>% 
+   full_join(tmp, by = "mediaOutlet") %>% 
+   write_csv("Dynamik_alle_Medien_ohne_NA.csv")
+```
+
+   
+
+
+#### Zu F1.6: Clustering der mediaOutlets
+```{r, out.width="24000px", fig.width = 35, fig.height=14}
+topOutlets <- reports %>% filter(mediaOutlet %in% mediaOutletCount$mediaOutlet) %>%  group_by(mediaOutlet) %>% count(modeOfUse) %>% 
+  mutate(modeOfUse = if_else(modeOfUse == "", "NA", modeOfUse)) %>% pivot_wider(names_from = modeOfUse, values_from = n) %>% 
+  mutate_if(is.integer, function(x)if_else(is.na(x), 0L, x))
+
+topOutlets <- data.frame(topOutlets)
+rownames(topOutlets) <- topOutlets$mediaOutlet
+topOutlets <- topOutlets[,-1]
+str(topOutlets)
+topOutlets <- topOutlets / rowSums(topOutlets)
+# Dist <- dist(topOutlets)
+Dist <- 1/sqrt(2) * dist(sqrt(topOutlets))
+
+cluster <- hclust(Dist)
+plot(cluster)
+```
+
+
+
+
+
+```{r}
+topOutlets <- cbind(n = arrange(mediaOutletCount, mediaOutlet)$n, topOutlets, Clusternummer = cutree(tree = cluster, k = 6))       
+tmp <- split(topOutlets, topOutlets$Clusternummer)
+
+bind_rows(tibble(tmp[[1]]), 
+          tibble(tmp[[2]]), 
+          tibble(tmp[[3]]), 
+          tibble(tmp[[4]]), 
+          tibble(tmp[[5]]), 
+          tibble(tmp[[6]])) %>% 
+   group_by(Clusternummer) %>% 
+   summarise(across(everything(), list(median = median))) %>% kable()
+
+kable(tmp[[1]], digits = 2)
+kable(tmp[[2]], digits = 2)
+kable(tmp[[3]], digits = 2)
+kable(tmp[[4]], digits = 2)
+kable(tmp[[5]], digits = 2)
+kable(tmp[[6]], digits = 2)
+
+
+```
+
+
+### Top Stories
+
+Stories mit mindestens 100 Treffern beim Pressclipping.
+```{r}
+TopStories <- left_join(reports, storyData, by = "storyNo") %>% filter(!(modeOfUse == "Themen-/ Expertenfindung")) %>% group_by(storyNo) %>% 
+   filter(storyType %in% c("Research in Context", "Rapid Reaction")) %>%  summarize(AnzTreffer = n()) %>% 
+   filter(AnzTreffer >= 100)
+TopStories <- left_join(TopStories, storyData, by = "storyNo")
+# write.csv(TopStories %>% select(-responsible, -responsibleSecondary), fileEncoding = "UTF-8", file = "tab_TopStories.csv")
+kable(TopStories)
+```
+
+#### Expert\*innen der Top Stories
+
+```{r}
+TopExperts <- experts %>% filter(experts$storyNo %in% TopStories$storyNo)
+# write.csv(TopExperts %>% select(storyNo, displayName, currentEmployer), fileEncoding = "UTF-8", file = "tab_TopExperts.csv")
+```
+
+
+### sampling
+
+```{r}
+reports100 <- reports %>% filter(storyNo %in% TopStories$storyNo & !(modeOfUse == "Themen-/ Expertenfindung"))
+# reports100 %>% filter(sourceType == "Nachrichtenagentur") %>% group_by(storyNo) %>% view() #summarise(n = n()) %>% kable()
+# reports100 %>% filter(modeOfUse == "indirekt via Nachrichtenagentur") %>% group_by(storyNo) %>% summarise(n = n()) %>% kable()
+# reports100 %>% filter(!(modeOfUse == "indirekt via Nachrichtenagentur")) %>% group_by(storyNo) %>% summarise(n = n()) %>% kable()
+reports100filter <- reports100 %>% filter(!(modeOfUse == "indirekt via Nachrichtenagentur") | sourceType == "Nachrichtenagentur")
+
+PCKontrollen <- read.csv(file = "PressClipping_Kontrollen_fSampleMerge.csv", fileEncoding = "UTF-8", stringsAsFactors = FALSE, sep = ";")
+PCKontrollenFilter <- PCKontrollen %>% filter(Medium %in% reports100filter$mediaOutlet)
+
+
+
+# write.csv(reports100, fileEncoding = "UTF-8", file = "tab_reports100.csv")
+# write.csv(reports100filter, fileEncoding = "UTF-8", file = "tab_reports100filter.csv")
+set.seed(19096)
+sampleID <- sample(1:nrow(reports100filter))
+sampleIDKontrolle <- sample(1:nrow(PCKontrollenFilter))
+
+# write.csv(select(reports100filter, storyNo, Treffer, published, title, mediaOutlet, uri)[sampleID[1:12],], fileEncoding = "UTF-8", file = "CA_pretest2.csv")
+# write.csv(select(reports100filter, storyNo, Treffer, published, title, mediaOutlet, uri)[sampleID[13:132],], fileEncoding = "UTF-8", file = "CA_SMC.csv")
+
+# write.csv(PCKontrollenFilter[sampleIDKontrolle[1:12],], fileEncoding = "UTF-8", file = "CA_pretest2_Kontrolle.csv")
+
+# write.csv(PCKontrollenFilter[sampleIDKontrolle[13:132],], fileEncoding = "UTF-8", file = "CA_Kontrolle.csv")
+# write.csv(PCKontrollenFilter[sampleIDKontrolle[133:142],], fileEncoding = "UTF-8", file = "CA_pretest3_Kontrolle.csv")
+
+
+
+```
+
+```{r}
+tmp <- select(reports100filter, storyNo, Treffer, published, title, mediaOutlet, uri)[sampleID[13:132],]
+# write.csv(paste0("Ident-Nr. global: ", tmp$storyNo, "\nIdent-Nr. Beitrag ", tmp$Treffer, "\n\nText: \n\n", tmp$mediaOutlet, ": ", tmp$title," (", tmp$published, ")\n\nLink: ", tmp$uri), fileEncoding = "UTF-8", file = "CA_SMC_word.csv")
+tmp <- select(reports100filter, storyNo, Treffer, published, title, mediaOutlet, uri)[sampleID[133:143],]
+# write.csv(paste0("Ident-Nr. global: ", tmp$storyNo, "\nIdent-Nr. Beitrag ", tmp$Treffer, "\n\nText: \n\n", tmp$mediaOutlet, ": ", tmp$title," (", tmp$published, ")\n\nLink: ", tmp$uri), fileEncoding = "UTF-8", file = "CA_SMC_pretest3_word.csv")
+
+
+
+tmp <- PCKontrollenFilter[sampleIDKontrolle[1:12],]
+# write.csv(paste0("Ident-Nr. global: ", tmp$Laufnummer, "\nIdent-Nr. Beitrag ", rownames(tmp), "\n\nText: \n\n", tmp$Medium, ":  (", tmp$Datum, ")\n\nLink: ", tmp$URL.Quelle.PDF..Text), fileEncoding = "UTF-8", file = "CA_pretest2_Kontrolle_word.csv")
+
+tmp <- PCKontrollenFilter[sampleIDKontrolle[13:132],]
+# write.csv(paste0("Ident-Nr. global: ", tmp$Laufnummer, "\nIdent-Nr. Beitrag ", rownames(tmp), "\n\nText: \n\n", tmp$Medium, ":  (", tmp$Datum, ")\n\nLink: ", tmp$URL.Quelle.PDF..Text), fileEncoding = "UTF-8", file = "CA_Kontrolle_word.csv")
+
+tmp <- PCKontrollenFilter[sampleIDKontrolle[133:145],]
+# write.csv(paste0("Ident-Nr. global: ", tmp$Laufnummer, "\nIdent-Nr. Beitrag ", rownames(tmp), "\n\nText: \n\n", tmp$Medium, ":  (", tmp$Datum, ")\n\nLink: ", tmp$URL.Quelle.PDF..Text), fileEncoding = "UTF-8", file = "CA_pretest3_Kontrolle_word.csv")
+```
+
+
+### weitere Analysen
